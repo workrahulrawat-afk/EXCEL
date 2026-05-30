@@ -3,9 +3,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
-# Create a new workbook
+# Create a new workbook with write_only=False to ensure proper formula handling
 wb = Workbook()
+wb.iso_dates = True
 
 # Remove default sheet
 if 'Sheet' in wb.sheetnames:
@@ -101,34 +103,37 @@ style_header(ws_fifo, 1, 1, 10, bg_color="70AD47")
 # FIFO Engine - Row by row formulas that work with dynamic data
 # These formulas will auto-fill based on the Transactions sheet
 
-# Starting from row 2, add formulas for up to 500 rows
-for row in range(2, 502):
+# Starting from row 2, add formulas for up to 200 rows (reduced for stability)
+for row in range(2, 202):
     # Stock Name - get from filtered buy transactions
-    ws_fifo[f'A{row}'] = f'=IFERROR(INDEX(SORT(FILTER(Transactions!$B:$B,(Transactions!$C:$C="Buy")*(Transactions!$B:$B<>"")),1,1),{row-1}),"")'
+    ws_fifo[f'A{row}'] = f'=IFERROR(INDEX(SORT(FILTER(Transactions!B$2:B$1000,(Transactions!C$2:C$1000="Buy")*(Transactions!B$2:B$1000<>"")),1,1),{row-1}),"")'
     
     # Buy Date
-    ws_fifo[f'B{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!$A:$G,(Transactions!$C:$C="Buy")*(Transactions!$B:$B<>"")),2,1),{row-1},1))'
+    ws_fifo[f'B{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!A$2:G$1000,(Transactions!C$2:C$1000="Buy")*(Transactions!B$2:B$1000<>"")),2,1),{row-1},1))'
     
     # Buy Qty
-    ws_fifo[f'C{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!$A:$G,(Transactions!$C:$C="Buy")*(Transactions!$B:$B<>"")),2,1),{row-1},4))'
+    ws_fifo[f'C{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!A$2:G$1000,(Transactions!C$2:C$1000="Buy")*(Transactions!B$2:B$1000<>"")),2,1),{row-1},4))'
     
     # Buy Price
-    ws_fifo[f'D{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!$A:$G,(Transactions!$C:$C="Buy")*(Transactions!$B:$B<>"")),2,1),{row-1},5))'
+    ws_fifo[f'D{row}'] = f'=IF(A{row}="","",INDEX(SORT(FILTER(Transactions!A$2:G$1000,(Transactions!C$2:C$1000="Buy")*(Transactions!B$2:B$1000<>"")),2,1),{row-1},5))'
     
     # Total Value
     ws_fifo[f'E{row}'] = f'=IF(C{row}="","",C{row}*D{row})'
     
     # Cumulative Buy Qty (for this stock up to this row)
-    ws_fifo[f'F{row}'] = f'=IF(A{row}="","",SUMIFS(C$2:C{row},A$2:A{row},A{row},B$2:B{row},"<="&B{row}))'
+    ws_fifo[f'F{row}'] = f'=IF(A{row}="","",SUMIFS(C:C,A:A,A{row},B:B,"<="&B{row}))'
     
     # Total Sold Qty (for this stock)
-    ws_fifo[f'G{row}'] = f'=IF(A{row}="","",SUMIFS(Transactions!$D:$D,Transactions!$B:$B,A{row},Transactions!$C:$C,"Sell"))'
+    ws_fifo[f'G{row}'] = f'=IF(A{row}="","",SUMIFS(Transactions!D:D,Transactions!B:B,A{row},Transactions!C:C,"Sell"))'
     
-    # Sold from this Lot (FIFO logic)
-    ws_fifo[f'H{row}'] = f'=IF(A{row}="","",MAX(0,MIN(C{row},G{row}-SUM(H$2:H{row-1}))))'
+    # Sold from this Lot (FIFO logic) - Fixed to avoid circular reference
+    if row == 2:
+        ws_fifo[f'H{row}'] = f'=IF(A{row}="","",MAX(0,MIN(C{row},G{row})))'
+    else:
+        ws_fifo[f'H{row}'] = f'=IF(A{row}="","",IF(G{row}<=0,0,MAX(0,MIN(C{row},G{row}-SUMIFS(H$2:H${row-1},A$2:A${row-1},A{row})))))'
     
     # Remaining Qty
-    ws_fifo[f'I{row}'] = f'=IF(C{row}="","",C{row}-H{row})'
+    ws_fifo[f'I{row}'] = f'=IF(C{row}="","",MAX(0,C{row}-H{row}))'
     
     # Remaining Value
     ws_fifo[f'J{row}'] = f'=IF(I{row}="","",I{row}*D{row})'
@@ -177,25 +182,25 @@ for col_num, header in enumerate(holdings_headers, 1):
 style_header(ws_holdings, 1, 1, 7, bg_color="FFC000")
 
 # Holdings formulas - Get unique stock names with remaining quantity
-ws_holdings['A2'] = '''=IFERROR(UNIQUE(FILTER(Transactions!B:B,(Transactions!C:C="Buy")*(Transactions!B:B<>""))),"")'''
+ws_holdings['A2'] = '=IFERROR(UNIQUE(FILTER(Transactions!B$2:B$1000,(Transactions!C$2:C$1000="Buy")*(Transactions!B$2:B$1000<>""))),"")' 
 
 # Net Holding Qty formula
-ws_holdings['B2'] = '''=IF(A2="","",SUMIFS(Transactions!D:D,Transactions!B:B,A2,Transactions!C:C,"Buy")-SUMIFS(Transactions!D:D,Transactions!B:B,A2,Transactions!C:C,"Sell"))'''
+ws_holdings['B2'] = '=IF(A2="","",SUMIFS(Transactions!D:D,Transactions!B:B,A2,Transactions!C:C,"Buy")-SUMIFS(Transactions!D:D,Transactions!B:B,A2,Transactions!C:C,"Sell"))'
 
-# Current Average Price formula (weighted average of remaining buy lots)
-ws_holdings['C2'] = '''=IF(B2="","",IF(B2<=0,"",SUMIFS(Transactions!G:G,Transactions!B:B,A2,Transactions!C:C,"Buy")/SUMIFS(Transactions!D:D,Transactions!B:B,A2,Transactions!C:C,"Buy")))'''
+# Current Average Price formula (from FIFO remaining lots)
+ws_holdings['C2'] = '=IF(B2="","",IF(B2<=0,"",SUMIFS(FIFO_Buy_Table!J:J,FIFO_Buy_Table!A:A,A2)/SUMIFS(FIFO_Buy_Table!I:I,FIFO_Buy_Table!A:A,A2)))'
 
-# Total Invested Value (based on current holdings)
-ws_holdings['D2'] = '''=IF(B2="","",IF(B2<=0,"",B2*C2))'''
+# Total Invested Value (based on current holdings at original prices)
+ws_holdings['D2'] = '=IF(B2="","",IF(B2<=0,"",SUMIFS(FIFO_Buy_Table!J:J,FIFO_Buy_Table!A:A,A2)))'
 
 # CMP - left blank for user to input or use Excel Data Types
 ws_holdings['E2'] = ''
 
 # Current Value
-ws_holdings['F2'] = '''=IF(E2="","",B2*E2)'''
+ws_holdings['F2'] = '=IF(OR(E2="",B2=""),"",B2*E2)'
 
 # Unrealized P&L
-ws_holdings['G2'] = '''=IF(F2="","",F2-D2)'''
+ws_holdings['G2'] = '=IF(OR(F2="",D2=""),"",F2-D2)'
 
 # Add note about CMP column
 ws_holdings['I1'] = 'Note: CMP Column'
@@ -239,16 +244,15 @@ for col_letter, label in metrics:
 
 # Formulas for metrics
 # Total Invested Value
-ws_dash['A4'] = '=SUMIFS(Holdings!D:D,Holdings!B:B,">0")'
+ws_dash['A4'] = '=SUMIF(Holdings!B:B,">0",Holdings!D:D)'
 ws_dash['A4'].number_format = '₹#,##0.00'
 
 # Current Portfolio Value
-ws_dash['B4'] = '=SUM(Holdings!F:F)'
+ws_dash['B4'] = '=SUMIF(Holdings!B:B,">0",Holdings!F:F)'
 ws_dash['B4'].number_format = '₹#,##0.00'
 
-# Total Realized Profit (calculated from FIFO_Buy_Table)
-# Sale Revenue - Cost of Sold Shares (FIFO based)
-ws_dash['C4'] = '''=SUMIFS(Transactions!G:G,Transactions!C:C,"Sell")-SUMIF(FIFO_Buy_Table!H:H,">0",FIFO_Buy_Table!H:H)*SUMIF(FIFO_Buy_Table!H:H,">0",FIFO_Buy_Table!D:D)'''
+# Total Realized Profit (Sale Revenue - FIFO Cost of Sold Shares)
+ws_dash['C4'] = '=SUMIFS(Transactions!G:G,Transactions!C:C,"Sell")-SUMIF(FIFO_Buy_Table!H:H,">0",FIFO_Buy_Table!E:E)*SUMIF(FIFO_Buy_Table!H:H,">0",FIFO_Buy_Table!H:H)/SUMIF(FIFO_Buy_Table!C:C,">0",FIFO_Buy_Table!C:C)'
 ws_dash['C4'].number_format = '₹#,##0.00'
 
 # Total Unrealized Profit
@@ -256,11 +260,11 @@ ws_dash['D4'] = '=SUM(Holdings!G:G)'
 ws_dash['D4'].number_format = '₹#,##0.00'
 
 # Overall P&L
-ws_dash['E4'] = '=C4+D4'
+ws_dash['E4'] = '=IFERROR(C4+D4,0)'
 ws_dash['E4'].number_format = '₹#,##0.00'
 
 # Return %
-ws_dash['F4'] = '=IF(A4=0,"",E4/A4)'
+ws_dash['F4'] = '=IF(A4=0,0,E4/A4)'
 ws_dash['F4'].number_format = '0.00%'
 
 # Add conditional formatting colors for P&L
@@ -334,24 +338,24 @@ for col_letter, label in metrics_template:
     style_metric_banner(ws_template, banner_row, col_num, label, bg_color="5B9BD5")
 
 # Banner formulas referencing B1 (stock name placeholder)
-# Realized P&L
-ws_template['A4'] = '''=IF(B1="ENTER_STOCK_NAME_HERE","",SUMIFS(Transactions!G:G,Transactions!B:B,B1,Transactions!C:C,"Sell")-SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Sell")*SUMIFS(Transactions!G:G,Transactions!B:B,B1,Transactions!C:C,"Buy")/SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Buy"))'''
+# Realized P&L - simplified formula
+ws_template['A4'] = '=IF(B1="ENTER_STOCK_NAME_HERE",0,SUMIFS(Transactions!G:G,Transactions!B:B,B1,Transactions!C:C,"Sell")-SUMIFS(FIFO_Buy_Table!E:E,FIFO_Buy_Table!A:A,B1,FIFO_Buy_Table!H:H,">0"))'
 ws_template['A4'].number_format = '₹#,##0.00'
 
 # Unrealized P&L
-ws_template['B4'] = '''=IF(B1="ENTER_STOCK_NAME_HERE","",INDEX(Holdings!G:G,MATCH(B1,Holdings!A:A,0)))'''
+ws_template['B4'] = '=IF(B1="ENTER_STOCK_NAME_HERE",0,IFERROR(INDEX(Holdings!G:G,MATCH(B1,Holdings!A:A,0)),0))'
 ws_template['B4'].number_format = '₹#,##0.00'
 
 # Current Holding Qty
-ws_template['C4'] = '''=IF(B1="ENTER_STOCK_NAME_HERE","",SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Buy")-SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Sell"))'''
+ws_template['C4'] = '=IF(B1="ENTER_STOCK_NAME_HERE",0,SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Buy")-SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Sell"))'
 ws_template['C4'].number_format = '#,##0'
 
 # Current Invested Value
-ws_template['D4'] = '''=IF(B1="ENTER_STOCK_NAME_HERE","",INDEX(Holdings!D:D,MATCH(B1,Holdings!A:A,0)))'''
+ws_template['D4'] = '=IF(B1="ENTER_STOCK_NAME_HERE",0,IFERROR(INDEX(Holdings!D:D,MATCH(B1,Holdings!A:A,0)),0))'
 ws_template['D4'].number_format = '₹#,##0.00'
 
 # Average Buy Price
-ws_template['E4'] = '''=IF(B1="ENTER_STOCK_NAME_HERE","",SUMIFS(Transactions!G:G,Transactions!B:B,B1,Transactions!C:C,"Buy")/SUMIFS(Transactions!D:D,Transactions!B:B,B1,Transactions!C:C,"Buy"))'''
+ws_template['E4'] = '=IF(OR(B1="ENTER_STOCK_NAME_HERE",C4=0),0,D4/C4)'
 ws_template['E4'].number_format = '₹#,##0.00'
 
 # Transaction History Table
@@ -368,7 +372,7 @@ for col_num, header in enumerate(history_headers, 1):
 style_header(ws_template, 8, 1, 7, bg_color="4472C4")
 
 # FILTER formula to show all transactions for the stock in B1
-ws_template['A9'] = '=IFERROR(FILTER(Transactions!A:G,Transactions!B:B=B1,"No transactions found"),"")'
+ws_template['A9'] = '=IFERROR(FILTER(Transactions!A$2:G$1000,Transactions!B$2:B$1000=B1),"No transactions found")'
 
 # Instructions
 ws_template['A6'] = 'Instructions: Enter stock name in B1, then duplicate this sheet for each stock you want to track individually.'
